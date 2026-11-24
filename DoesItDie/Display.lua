@@ -809,6 +809,33 @@ local function targetFrameTopLayer()
     return topStrata, topLevel, visited
 end
 
+-- Blizzard's target frame needs a floor under the walk's answer. v0.10.0 stopped counting hidden frames (Edit Mode
+-- keeps a hidden MEDIUM/1000 selection frame under it), and without that frame the walk lands in LOW, where the
+-- marker and skull don't show over Forever's target frame (reports on v0.10.0; on the player frame DoesItLive
+-- verified the same: above LOW/1001 it didn't show, MEDIUM/1001 did). Up to v0.9.4 that hidden frame was the
+-- floor without anyone meaning it, and that worked, so it's the floor again: MEDIUM/1000, marker and skull just
+-- above it. Other addons' frames (custom path, EllesmereUI) keep the walk's answer, as in v0.9.4.
+-- The world map shares MEDIUM and drew under the marker there (Ironship, PR #47), so while it's open on Blizzard's
+-- frame the display hides (coveredByWorldMap).
+local FLOOR_STRATA, FLOOR_LEVEL = "MEDIUM", 1000
+local function blizzardFloor(strata, level)
+    local rank, floorRank = STRATA_RANK[strata] or 0, STRATA_RANK[FLOOR_STRATA]
+    if rank < floorRank or (rank == floorRank and level < FLOOR_LEVEL) then return FLOOR_STRATA, FLOOR_LEVEL end
+    return strata, level
+end
+
+local function usesBlizzardFrame()
+    return TargetFrame ~= nil and layerRoot == TargetFrame
+end
+
+local function coveredByWorldMap()
+    if previewHost or not usesBlizzardFrame() then return false end
+    local map = WorldMapFrame
+    if type(map) ~= "table" or type(map.IsShown) ~= "function" then return false end
+    local ok, shown = pcall(map.IsShown, map)
+    return ok and not isSecret(shown) and shown == true
+end
+
 -- The bar can change without a target change (BetterBlizzFrames' settings; it also comes up late), so the
 -- attachment is rechecked once a second, whether or not anything is showing. It's cheap: a few lookups.
 local attachCheckedAt = 0
@@ -849,6 +876,7 @@ local function updateLayering(now)
         end
         return
     end
+    if not previewHost and usesBlizzardFrame() then strata, level = blizzardFloor(strata, level) end
     for i, frame in ipairs({ remainingBar, fillLayer, clipLayer, outlineLayer, sparkLayer, skullWindow, skullBar }) do
         frame:SetFrameStrata(strata)
         frame:SetFrameLevel(level + i)
@@ -957,6 +985,7 @@ local function refresh()
         local ok, visible = pcall(visibilityFrame.IsVisible, visibilityFrame)
         if ok and not isSecret(visible) and not visible then return hideAll() end
     end
+    if coveredByWorldMap() then return hideAll() end
     local damage, count, breakdown = ns.tracking.targetRemainingDamage()
     if damage ~= lastTracedDamage then
         lastTracedDamage = damage

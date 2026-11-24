@@ -1039,6 +1039,43 @@ check("  marker moves to its bar", same(G.DoesItDieRemaining.allPoints, G.BBFMir
 lua.execute("BBF.HealthBar = function() error('broken') end")
 step("a BBF that throws", lambda: H.update(1.2))
 check("  falls back to Blizzard's bar", same(G.DoesItDieRemaining.allPoints, G.TargetFrameHealthBar), True)
+
+# Blizzard's target frame in LOW (its hidden Edit Mode frame no longer counted since v0.10.0): the marker didn't show
+# there in v0.10.0, so it gets v0.9.4's floor, MEDIUM/1000, with the marker just above. The world map shares MEDIUM,
+# so the display hides while it's open.
+lua.execute("""
+    for _, f in ipairs({ TargetFrame, TargetFrame.TargetFrameContainer, TargetFrame.TargetFrameContent,
+                         TargetFrame.TargetFrameContent.TargetFrameContentMain, TargetFrameHealthBar,
+                         TargetFrame.TargetFrameContent.TargetFrameContentMain.HealthBarsContainer, BBFMirrorBar }) do
+        f:SetFrameStrata("LOW"); f:SetFrameLevel(500)
+    end
+    WorldMapFrame = CreateFrame("Frame", "WorldMapFrame", UIParent)
+    WorldMapFrame:Hide()
+""")
+
+
+def dot_on_blizzard_frame():
+    G.targetGuid = "Creature-0-1-2-3-3099-000001"
+    H.fire("PLAYER_TARGET_CHANGED")
+    H.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-F1", 172)
+    H.update(1.2)
+
+
+step("Corruption on a target, Blizzard's frame in LOW/500", dot_on_blizzard_frame)
+check("  marker at v0.9.4's floor, MEDIUM/1001", (G.DoesItDieRemaining.strata, G.DoesItDieRemaining.level),
+      ("MEDIUM", 1001))
+check("  and showing", G.DoesItDieRemaining.IsShown(G.DoesItDieRemaining), True)
+step("open the world map", lambda: (G.WorldMapFrame.Show(G.WorldMapFrame), H.update(0.2)))
+check("  marker hidden under it", G.DoesItDieRemaining.IsShown(G.DoesItDieRemaining), False)
+step("close it", lambda: (G.WorldMapFrame.Hide(G.WorldMapFrame), H.update(0.2)))
+check("  marker back", G.DoesItDieRemaining.IsShown(G.DoesItDieRemaining), True)
+lua.execute("TargetFrame:SetFrameStrata('HIGH'); TargetFrame:SetFrameLevel(5)")
+step("the target frame above the floor (HIGH/5)", lambda: H.update(1.2))
+check("  the marker goes above it, not down to the floor",
+      (G.DoesItDieRemaining.strata, G.DoesItDieRemaining.level), ("HIGH", 6))
+lua.execute("WorldMapFrame = nil")
+G.targetGuid = None
+H.fire("PLAYER_TARGET_CHANGED")
 # Issue #36: the layering walk over the target frame's tree ran every second even with nothing to show, over
 # however many frames other addons had hung there. Now it only runs while the marker shows, and stops at 300.
 lua.execute("""

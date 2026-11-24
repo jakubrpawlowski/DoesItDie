@@ -921,6 +921,33 @@ local function stackOnto(dot, previous, cap)
     previous.stackedInto = dot -- its own ticks now count for this one (meterSkipReason)
 end
 
+-- Up to v0.9.4 the parser read "1,002 Shadow damage" as 2, and sizes learned for such spells then stayed wrong
+-- after the fix (Bane of Agony rank 6: /did reset fixed it). Which spells were hit depends on the player's gear
+-- (Forever's tooltips include spell power), so instead of a fixed list, the first cast of each spell whose tooltip
+-- now reads 1000 or more (the DoT, or the upfront hit that meter learning takes out) forgets what was learned for it (every combo point count too), once, before this cast reads
+-- it. Spells under 1000 were read right and keep theirs. db.overThousandChecked holds the spells already done.
+local function forgetPreFixLearning(spellID, total, desc)
+    local done = db.overThousandChecked
+    if not done or done[spellID] or not total then return end
+    local direct = total < 1000 and parseDirectPart(desc) or 0
+    if total < 1000 and not (type(direct) == "number" and direct >= 1000) then return end
+    done[spellID] = true
+    local prefix, forgot = spellID .. "x", {}
+    for key in pairs(db.ticks) do
+        if key == spellID or (type(key) == "string" and key:sub(1, #prefix) == prefix) then
+            table.insert(forgot, tostring(key))
+        end
+    end
+    for _, key in ipairs(forgot) do
+        local stored = tonumber(key) or key
+        db.ticks[stored] = nil
+        if db.tickWeights then db.tickWeights[stored] = nil end
+        if ns.dropSnapshots then ns.dropSnapshots(stored) end
+    end
+    trace(string.format("OVER 999 tooltip for spell %d (%d dmg): %s", spellID, total, #forgot > 0
+        and ("forgot sizes learned under the old reading: " .. table.concat(forgot, ", ")) or "nothing learned to forget"))
+end
+
 -- Returns the target key the DoT was applied to, or nil if the cast wasn't a tracked DoT.
 local function onPlayerCast(spellID, castGUID)
     local key = castTargetKey(castGUID)
@@ -947,6 +974,7 @@ local function onPlayerCast(spellID, castGUID)
         end
         return
     end
+    forgetPreFixLearning(spellID, total, desc)
     -- A finisher's tick size depends on the points spent, so learned sizes are kept per point count.
     local tickKey = spellID
     if isFinisher then tickKey = comboPoints and (spellID .. "x" .. comboPoints) or nil end
@@ -1798,6 +1826,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
             db.ticks, db.intervals, db.version = nil, nil, DB_VERSION
         end
         db.ticks = db.ticks or {}
+        db.overThousandChecked = db.overThousandChecked or {} -- see forgetPreFixLearning
         db.log = db.log or {}
         applyDefaults()
         ns.db = db
