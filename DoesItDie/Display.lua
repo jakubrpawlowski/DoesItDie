@@ -776,8 +776,24 @@ local SLOW_LAYER_MS = 10
 -- marker and skull into the world map's strata, above the map's art.
 local function targetFrameTopLayer()
     local root = layerRoot or healthBar
-    if not root or root == UIParent then return "BACKGROUND", 0, 0 end
-    local topStrata, topLevel, visited = "BACKGROUND", 0, 0
+    if not root or root == UIParent then return "BACKGROUND", 0, 0, false end
+    local topStrata, topLevel, visited, secretLayer = "BACKGROUND", 0, 0, false
+    -- Some of Blizzard's frames report a secret strata/level in Forever; those can't be compared, so skip them
+    -- (their children are still visited) and remember that the top is not trustworthy.
+    local function consider(frame)
+        local ok, strata, level = pcall(function() return frame:GetFrameStrata(), frame:GetFrameLevel() end)
+        if not ok then return end
+        if isSecret(strata) or isSecret(level) then
+            secretLayer = true
+            return
+        end
+        local rank, topRank = STRATA_RANK[strata] or 0, STRATA_RANK[topStrata] or 0
+        if rank > topRank then
+            topStrata, topLevel = strata, level
+        elseif rank == topRank and level > topLevel then
+            topLevel = level
+        end
+    end
     local function visit(frame, depth)
         if depth > 0 then
             local okShown, shown = pcall(frame.IsShown, frame)
@@ -787,17 +803,7 @@ local function targetFrameTopLayer()
         if not okForb or isSecret(forb) or forb then return end
         visited = visited + 1
         if visited > MAX_LAYER_FRAMES then return end
-        -- Some of Blizzard's frames report a secret strata/level in Forever; those can't be compared, so skip
-        -- them (their children are still visited).
-        local strata, level = frame:GetFrameStrata(), frame:GetFrameLevel()
-        if not isSecret(strata) and not isSecret(level) then
-            local rank, topRank = STRATA_RANK[strata] or 0, STRATA_RANK[topStrata] or 0
-            if rank > topRank then
-                topStrata, topLevel = strata, level
-            elseif rank == topRank and level > topLevel then
-                topLevel = level
-            end
-        end
+        consider(frame)
         if depth < 6 then
             for _, child in ipairs({ frame:GetChildren() }) do
                 if visited > MAX_LAYER_FRAMES then break end
@@ -806,7 +812,11 @@ local function targetFrameTopLayer()
         end
     end
     visit(root, 0)
-    return topStrata, topLevel, visited
+    -- The walk can stop at the frame cap or not reach them at all; the frames we actually draw over decide.
+    for _, frame in ipairs({ healthBar, skullAnchor }) do
+        if frame then consider(frame) end
+    end
+    return topStrata, topLevel, visited, secretLayer
 end
 
 -- The bar can change without a target change (BetterBlizzFrames' settings; it also comes up late), so the
@@ -820,11 +830,16 @@ end
 
 -- Keeps our marker and skull above everything on the target frame. Checked only while they show (throttled)
 -- because Blizzard can re-layer the frame at any time; nothing needs layering while they're hidden.
+local function gamepadUI()
+    local ok, using = pcall(IsUsingGamepad)
+    return ok and using == true
+end
+
 local layerCheckedAt, lastStrata, lastLevel, layerErrorLogged, slowLayerLogged = 0, nil, nil, false, false
 local function updateLayering(now)
     if now - layerCheckedAt < LAYER_CHECK_INTERVAL then return end
     layerCheckedAt = now
-    local ok, strata, level, visited
+    local ok, strata, level, visited, secretLayer
     if previewHost then
         -- One strata above the options window: it's a top-level frame, which WoW raises above everything else
         -- in its own strata (our frames included) when it's shown or clicked. Dropdowns and tooltips sit higher.
@@ -832,7 +847,7 @@ local function updateLayering(now)
     else
         local clock = type(debugprofilestop) == "function" and debugprofilestop or nil
         local started = clock and clock()
-        ok, strata, level, visited = pcall(targetFrameTopLayer)
+        ok, strata, level, visited, secretLayer = pcall(targetFrameTopLayer)
         local ms = started and (clock() - started)
         local capped = ok and visited > MAX_LAYER_FRAMES
         if ok and not slowLayerLogged and (capped or (ms and ms > SLOW_LAYER_MS)) then
@@ -849,13 +864,40 @@ local function updateLayering(now)
         end
         return
     end
+    -- If a frame's layer was secret, nothing above it can be trusted: use a wide fallback. A readable tree keeps
+    -- the exact top, so hidden Edit Mode selection frames still don't pull the marker up.
+    -- The reported top is only trustworthy for the regular UI: the gamepad UI draws the target frame's art above
+    -- the levels it reports, so the marker ends up under the health bar's fill. Use a floor in that case.
+    local topStrata, topLevel = strata, level
+    local levelMargin = 0
+    local gamepad = not previewHost and gamepadUI()
+    if not previewHost and (secretLayer or gamepad) then
+        if (STRATA_RANK[strata] or 0) < STRATA_RANK.HIGH then strata = "HIGH" end
+        levelMargin = 1000
+    end
     for i, frame in ipairs({ remainingBar, fillLayer, clipLayer, outlineLayer, sparkLayer, skullWindow, skullBar }) do
         frame:SetFrameStrata(strata)
-        frame:SetFrameLevel(level + i)
+        frame:SetFrameLevel(level + levelMargin + i)
+    end
+    if not previewHost and (secretLayer or gamepad) then
+        local skullStrata = (STRATA_RANK[strata] or 0) >= STRATA_RANK.HIGH and strata or "HIGH"
+        local skullLevel = math.max(level + 1000, 2000)
+        skullWindow:SetFrameStrata(skullStrata)
+        skullWindow:SetFrameLevel(skullLevel)
+        skullBar:SetFrameStrata(skullStrata)
+        skullBar:SetFrameLevel(skullLevel + 1)
     end
     if strata ~= lastStrata or level ~= lastLevel then
         lastStrata, lastLevel = strata, level
-        trace(string.format("LAYER target frame top is %s/%d; marker and skull placed above it", strata, level))
+        local barStrata, barLevel = "nil", 0
+        if healthBar then
+            local okBar, s, l = pcall(function() return healthBar:GetFrameStrata(), healthBar:GetFrameLevel() end)
+            if okBar then barStrata, barLevel = s, l end
+        end
+        trace(string.format("LAYER top %s/%d; placed at %s/%d (bar %s/%s) pad=%s%s", topStrata, topLevel, strata,
+            level + levelMargin, isSecret(barStrata) and "secret" or tostring(barStrata),
+            isSecret(barLevel) and "secret" or tostring(barLevel), tostring(gamepad),
+            levelMargin > 0 and " floor" or ""))
     end
 end
 
