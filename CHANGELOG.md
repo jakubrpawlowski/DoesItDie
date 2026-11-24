@@ -1,5 +1,10 @@
 # DoesItDie
 
+## Next version (unreleased)
+
+- **The marker and kill icon show on the target frame again.** In v0.10.0 they could end up drawn underneath Blizzard's target frame, so for many players nothing showed (or only sometimes). They're back where v0.9.4 put them, and hide while the world map is open so they don't cover it. Same for the focus frame. Thanks to stoned301 and Slator for the reports.
+- **Learned sizes from before the over-999 fix are forgotten automatically.** Spells whose tooltip reads 1,000 or more (Bane of Agony and Shadow Word: Pain at high ranks, for example) kept a wrong learned size after v0.10.0 until `/did reset`. Now the first cast of each such spell forgets it once and the addon learns it again over a fight or two. Other spells keep what they learned. Thanks to pazzypaz.
+
 ## v0.10.0
 
 **Restart the game fully after updating** (not just /reload): this version adds a new file.

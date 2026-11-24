@@ -113,6 +113,7 @@ local STRATA_RANK = {
 local LAYER_CHECK_INTERVAL = 1
 local layerCheckedAt, topStrata, topLevel, layerBar = -math.huge, nil, nil, nil
 
+local FLOOR_LEVEL = 1000 -- Blizzard's focus frame: MEDIUM/1000 at least, as in v0.9.4 (see updateLayering)
 local MAX_LAYER_FRAMES = 300 -- as in Display.lua: other addons' frames under it can make the walk slow (#36)
 
 local function topLayer(root)
@@ -155,6 +156,14 @@ local function updateLayering(bar, now)
         layerCheckedAt, layerBar = now, bar
         local root = ns.frameRoot and ns.frameRoot(bar, "focus") or bar
         local ok, strata, level = pcall(topLayer, root)
+        -- Blizzard's focus frame gets the target frame's floor (see blizzardFloor in Display.lua): without the
+        -- hidden Edit Mode frame the walk lands in LOW, where the marker doesn't show over the frame's art.
+        if ok and FocusFrame and root == FocusFrame then
+            local rank = STRATA_RANK[strata] or 0
+            if rank < STRATA_RANK.MEDIUM or (rank == STRATA_RANK.MEDIUM and level < FLOOR_LEVEL) then
+                strata, level = "MEDIUM", FLOOR_LEVEL
+            end
+        end
         if ok and (strata ~= topStrata or level ~= topLevel) then
             topStrata, topLevel = strata, level
             ns.trace(string.format("LAYER focus frame top is %s/%d; focus marker placed above it", strata, level))
@@ -175,6 +184,11 @@ local function refresh()
     if db.focusMode == "off" or not UnitExists("focus") or dead() then return hide() end
     local bar = focusBar(db)
     if not bar or not shown(bar) then return hide() end
+    -- Over Blizzard's focus frame the widgets sit in the world map's strata (MEDIUM): hidden while it's open.
+    if FocusFrame and ns.frameRoot and ns.frameRoot(bar, "focus") == FocusFrame and WorldMapFrame then
+        local okMap, mapShown = pcall(WorldMapFrame.IsShown, WorldMapFrame)
+        if okMap and not isSecret(mapShown) and mapShown == true then return hide() end
+    end
     local entries, total = ns.dotBreakdownForUnit("focus")
     if total <= 0 then return hide() end
     ns.barMarker.pin(host)

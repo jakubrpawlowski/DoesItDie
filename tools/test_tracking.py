@@ -88,6 +88,10 @@ local SPELLS = {
     [19] = { "Feuerbrand", "Verbrennt den Gegner und fügt ihm 11 Feuerschaden sowie im Verlauf von 15 Sek. insgesamt 20 zusätzlichen Feuerschaden zu." },
     [20] = { "Lacerate", "Lacerates the enemy target, making them bleed for 20 damage over 15 sec plus 10% weapon damage per existing application of Lacerate on the target. This effect stacks up to 5 times on the same target." },
     [21] = { "Lacerate", "Wounds the target causing them to bleed for 406 damage over 21 sec." },
+    -- Over 999 (Forever's tooltips include spell power): v0.9.4 read these as 2, 200 and 50.
+    [22] = { "Bane of Agony", "Afflicts the target with agony, causing 1,002 Shadow damage over 24 sec.  This damage is dealt slowly at first, and builds up as the Bane reaches its full duration." },
+    [23] = { "Rip", "Finishing move that causes damage over time. 1 point : 420 damage over 12 sec. 5 points: 1,200 damage over 12 sec." },
+    [24] = { "Immolate", "Burns the enemy for 1,050 Fire damage and then an additional 400 Fire damage over 15 sec." },
     [15] = { "Explosive Trap", "Place a Fire trap that explodes when an enemy approaches, causing 201 to 257 Fire damage and 330 additional Fire damage over 20 sec to all within 10 yards. Trap will exist for 1 min. Only one Fire trap can be active at a time." },
 }
 local function spellNameAndDescription(id) return SPELLS[id][1], SPELLS[id][2] end
@@ -98,7 +102,7 @@ function api.reset(waitMode, estimateDuringCast)
     for k in pairs(dotsByTarget) do dotsByTarget[k] = nil end
     for k in pairs(db.ticks) do db.ticks[k] = nil end
     if takeCombatTally then takeCombatTally() end
-    db.tickWeights = nil
+    db.tickWeights, db.overThousandChecked = nil, nil
     db.waitFirstTick = waitMode or "off"
     lastBuilder, lastDotCast, lastOutcome, armedTrap, comboCheck, builderAtSend = nil, nil, nil, nil, nil, nil
     for k in pairs(sentTargets) do sentTargets[k] = nil end
@@ -112,6 +116,8 @@ function api.reset(waitMode, estimateDuringCast)
     log = {}
 end
 function api.learn(spellID, perTick) db.ticks[spellID] = perTick end
+-- The one-time forgetting of sizes learned before the over-999 fix (forgetPreFixLearning): on, as after ADDON_LOADED.
+function api.overThousandCheck() db.overThousandChecked = {} end
 function api.learned(spellID) return db.ticks[spellID] end
 -- Pressing the button (UNIT_SPELLCAST_SENT, which names the cast's target) and the server confirming it
 -- (UNIT_SPELLCAST_SUCCEEDED).
@@ -964,6 +970,23 @@ at(5.95); sim.cast(20)                     # stack 2 cast before nominal 6.0
 at(6.10); sim.hiddenHit(1)                 # white hit right after 6.0 must NOT double-count slot 6.0
 check("Lacerate stacked right after early tick: white hit doesn't double-count the tick", ticks("Lacerate"), 2)
 check("  next tick is 9.0, 5 ticks left at 2 stacks (40 dmg, not 48)", sim.marker(), "40 dmg from 1 DoT(s)")
+
+# Sizes learned while "1,002" read as 2 (up to v0.9.4) are forgotten once, at the first cast whose tooltip reads 1000+.
+sim.reset(); sim.overThousandCheck(); sim.learn(22, 7.5); sim.learn(6, 3); sim.cast(22)
+check("Over 999: Agony's old learned size is forgotten at its first cast", sim.learned(22), None)
+check("  and other spells keep theirs", sim.learned(6), 3)
+sim.learn(22, 85); sim.cast(22)
+check("  only once: a size learned since stays", sim.learned(22), 85)
+sim.reset(); sim.overThousandCheck(); sim.learn("23x1", 30); sim.learn("23x5", 4); sim.learn(23, 1); sim.learn(2, 13)
+sim.comboAPI(1); sim.cast(23)
+check("Over 999: a finisher at 1 point (420) keeps its sizes", (sim.learned("23x1"), sim.learned("23x5")), (30, 4))
+sim.comboAPI(5); sim.cast(23)
+check("  at 5 points (1,200) every point count's size is forgotten", (sim.learned("23x1"), sim.learned("23x5"), sim.learned(23)), (None, None, None))
+check("  and other spells keep theirs", sim.learned(2), 13)
+sim.reset(); sim.overThousandCheck(); sim.learn(24, 20); sim.cast(24)
+check("Over 999: an upfront hit over 999 (Immolate, 400 DoT) forgets too", sim.learned(24), None)
+sim.reset(); sim.learn(22, 7.5); sim.cast(22)
+check("Over 999: nothing forgotten without the check table (no ADDON_LOADED yet)", sim.learned(22), 7.5)
 
 print(f"\n{'all passed' if not failures else str(failures) + ' FAILED'}")
 if failures:
